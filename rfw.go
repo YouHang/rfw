@@ -27,7 +27,11 @@ func WithCleanUp(remainCnt int) RfwOption {
 }
 
 func generatePath(basepath string, t time.Time) string {
-	return fmt.Sprintf("%s-%4d%02d%02d", basepath, t.Year(), t.Month(), t.Day())
+	dir := filepath.Dir(basepath)
+	filename := filepath.Base(basepath)
+	ext := filepath.Ext(filename)
+	prefix := filename[:len(filename)-len(ext)]
+	return filepath.Join(dir, fmt.Sprintf("%s-%4d%02d%02d%s", prefix, t.Year(), t.Month(), t.Day(), ext))
 }
 
 func New(basepath string) (*Rfw, error) {
