@@ -8,11 +8,14 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/lestrrat-go/strftime"
 )
 
 type Rfw struct {
 	lock               sync.RWMutex
 	basepath           string
+	format             bool
 	lastTime           time.Time
 	remainCntOfLogFile int
 	outFile            *os.File
@@ -20,18 +23,28 @@ type Rfw struct {
 
 type RfwOption func(r *Rfw)
 
+func WithFormat(format bool) RfwOption {
+	return func(r *Rfw) {
+		r.format = format
+	}
+}
+
 func WithCleanUp(remainCnt int) RfwOption {
 	return func(r *Rfw) {
 		r.remainCntOfLogFile = remainCnt
 	}
 }
 
-func generatePath(basepath string, t time.Time) string {
-	dir := filepath.Dir(basepath)
-	filename := filepath.Base(basepath)
-	ext := filepath.Ext(filename)
-	prefix := filename[:len(filename)-len(ext)]
-	return filepath.Join(dir, fmt.Sprintf("%s-%4d%02d%02d%s", prefix, t.Year(), t.Month(), t.Day(), ext))
+func generatePath(basepath string, format bool, t time.Time) string {
+	defaultPath := fmt.Sprintf("%s-%4d%02d%02d", basepath, t.Year(), t.Month(), t.Day())
+	if !format {
+		return defaultPath
+	}
+	path, err := strftime.Format(basepath, t)
+	if err != nil {
+		return defaultPath
+	}
+	return path
 }
 
 func New(basepath string) (*Rfw, error) {
@@ -40,24 +53,27 @@ func New(basepath string) (*Rfw, error) {
 
 func NewWithOptions(basepath string, opts ...RfwOption) (*Rfw, error) {
 	t := time.Now()
-	path := generatePath(basepath, t)
+	rt := &Rfw{basepath: basepath, lastTime: t}
+	for _, o := range opts {
+		o(rt)
+	}
+	path := generatePath(basepath, rt.format, t)
 	r, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0664)
 	if err != nil {
 		return nil, err
 	}
-	rt := &Rfw{basepath: basepath, lastTime: t, outFile: r}
-	for _, o := range opts {
-		o(rt)
-	}
+
+	rt.outFile = r
+
 	if err = rt.checkClearLogFile(t); err != nil {
 		return nil, err
 	}
 	return rt, nil
 }
 
-func getOutdatedPath(basepath string, paths []string, now time.Time, remain int) []string {
+func getOutdatedPath(basepath string, paths []string, now time.Time, remain int, format bool) []string {
 	sort.Strings(paths)
-	edgepath := generatePath(basepath, now.AddDate(0, 0, 0-remain))
+	edgepath := generatePath(basepath, format, now.AddDate(0, 0, 0-remain))
 	i := sort.SearchStrings(paths, edgepath)
 	if i <= 0 {
 		return []string{}
@@ -76,7 +92,7 @@ func (w *Rfw) checkClearLogFile(now time.Time) error {
 	if err != nil {
 		return err
 	}
-	torms := getOutdatedPath(w.basepath, matches, now, w.remainCntOfLogFile)
+	torms := getOutdatedPath(w.basepath, matches, now, w.remainCntOfLogFile, w.format)
 	for _, p := range torms {
 		os.Remove(p)
 	}
@@ -96,7 +112,7 @@ func (w *Rfw) Write(p []byte) (int, error) {
 		w.lock.Lock()
 		if t.YearDay() != w.lastTime.YearDay() || t.Year() != w.lastTime.Year() {
 			needcheck = true
-			path := generatePath(w.basepath, t)
+			path := generatePath(w.basepath, w.format, t)
 			f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0664)
 			if err != nil {
 				w.lock.Unlock()
